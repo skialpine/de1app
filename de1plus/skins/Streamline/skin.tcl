@@ -4723,7 +4723,7 @@ proc streamline_history_profile_back {} {
 proc streamline_history_profile_fwd { {destination {}} } {
 
 	if {[info exists ::de1(streamline_shot_in_progress)] == 1} {
-		popup [translate "Wait until this shot is saved"]
+		#popup [translate "Wait until this shot is saved"]
 		return
 	}
 

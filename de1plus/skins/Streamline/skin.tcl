@@ -3883,24 +3883,33 @@ set charts_height_zoomed 1040
 
 set ::streamline_enable_chart_labels 1
 set ::streamline_enable_chart_labels_realtime 0
+set ::labelfont Inter-Regular10
 
 proc streamline_graph_smarts {widget {which ""} } {
 
 	set ::streamline_chart $widget
 
 	if {$::streamline_enable_chart_labels == 1} {
-		set anchor ne
-		set labelfont Inter-Regular10
-		set yoffset [rescale_x_skin -40]
-		set xoffset [rescale_x_skin 30]
+		#set anchor ne
+		set weightanchor w
+		set pressureanchor w
+		set tempanchor w
+		set flowanchor w
+		#set yoffset [rescale_x_skin -40]
+		#set xoffset [rescale_x_skin 30]
+		set yoffset 0
+		set xoffset 0
 		set padx [rescale_x_skin 2]
 		set pady [rescale_x_skin 2]
+		set pady 0
+		set padx 0
 		set label_background $::chart_background
 		set label_background ""
-		$widget marker create text -coords {10000 1} -text [subst {\u00B0C}] -anchor $anchor  -font $labelfont  -foreground $::temperature_line_color -name "label_temperature"  -xoffset $xoffset  -yoffset $yoffset -background $label_background -padx $padx -pady $pady
-		$widget marker create text -coords {10000 1} -text [subst {[translate "pressure"]}] -anchor $anchor  -font $labelfont  -foreground $::pressurelinecolor -name "label_pressure" -xoffset $xoffset   -yoffset $yoffset -background $label_background -padx $padx -pady $pady
-		$widget marker create text -coords {10000 1} -text [subst {[translate "weight"]}] -anchor $anchor  -font $labelfont  -foreground $::weightlinecolor_label -name "label_weight"  -xoffset $xoffset -yoffset $yoffset -background $label_background -padx $padx -pady $pady
-		$widget marker create text -coords {10000 1} -text [subst {[translate "flow"]}] -anchor $anchor  -font $labelfont  -foreground $::flow_line_color -name "label_flow"  -xoffset $xoffset  -yoffset $yoffset -background $label_background -padx $padx -pady $pady
+
+		$widget marker create text -coords {10000 1} -text [subst {\u00B0C}] -anchor $tempanchor  -font $::labelfont  -foreground $::temperature_line_color -name "label_temperature"  -xoffset $xoffset  -yoffset $yoffset -background $label_background -padx $padx -pady $pady
+		$widget marker create text -coords {10000 1} -text [subst {[translate "pressure"]}] -anchor $pressureanchor  -font $::labelfont  -foreground $::pressurelinecolor -name "label_pressure" -xoffset $xoffset   -yoffset $yoffset -background $label_background -padx $padx -pady $pady
+		$widget marker create text -coords {10000 1} -text [subst {[translate "weight"]}] -anchor $weightanchor  -font $::labelfont  -foreground $::weightlinecolor_label -name "label_weight"  -xoffset $xoffset -yoffset $yoffset -background $label_background -padx $padx -pady $pady
+		$widget marker create text -coords {10000 1} -text [subst {[translate "flow"]}] -anchor $flowanchor  -font $::labelfont  -foreground $::flow_line_color -name "label_flow"  -xoffset $xoffset  -yoffset $yoffset -background $label_background -padx $padx -pady $pady
 	}
 
 	$widget element create line_espresso_pressure_goal -xdata espresso_elapsed -ydata espresso_pressure_goal -symbol none -label "" -linewidth [rescale_x_skin 4] -color $::pressurelinecolor_goal  -smooth $::settings(live_graph_smoothing_technique)  -pixels 0 -dashes $::pressure_goal_dashes; 
@@ -4070,10 +4079,23 @@ proc streamline_graph_smarts {widget {which ""} } {
 	}	
 }
 
+
 set plotpadx [rescale_x_skin 20]
 set plotpady [rescale_x_skin 20]
 if {$::streamline_enable_chart_labels == 1} {
-	set plotpadx [list 0 [rescale_x_skin 40]]
+
+	set largest_label_font 10
+	foreach s [list "pressure" "weight" "flow"] {
+		set width [font measure $::labelfont [translate $s]]
+		if {$width > $largest_label_font} {
+			set largest_label_font $width
+		}
+	}
+
+	# john : not sure why a 2x rescale is needed to make this metric work, but it does work perfectly at 1280x800
+	set rescale_y [expr {2 * $largest_label_font}]
+	set plotpadx [list 0 [rescale_x_skin $rescale_y]]
+
 	set plotpady [rescale_x_skin 20]
 }
 
@@ -4253,10 +4275,13 @@ proc update_chart_label_position {in_realtime} {
 
 		if {[espresso_elapsed range end end] > 0} {
 
+			set avoid_overlapping 0
+
 			set elapsed [expr {[espresso_elapsed range end end]}]
 			#set elapsed1 [$::streamline_chart axis limits x]
 			#set elapsed [lindex $elapsed1 1]
 
+			#set pressure_y [expr {1.0 * [espresso_pressure range end end] - 0.5}]
 			set pressure_y [espresso_pressure range end end]
 			$::streamline_chart marker configure "label_pressure" -coords [list $elapsed $pressure_y]
 			$::streamline_chart_zoomed marker configure "label_pressure" -coords [list $elapsed $pressure_y]
@@ -4270,13 +4295,18 @@ proc update_chart_label_position {in_realtime} {
 			########################
 			# make sure pressure doesn't overwrite temp label
 			set temp_y [espresso_temperature_basket10th range end end]
-			set distance [expr {$temp_y - $pressure_y}]
-			if {$distance > 0 && $distance < $mindist} {
-				set temp_y [expr {$pressure_y + $mindist}]
+			
+
+			if {$avoid_overlapping == 1} {
+				set distance [expr {$temp_y - $pressure_y}]
+				if {$distance > 0 && $distance < $mindist} {
+					set temp_y [expr {$pressure_y + $mindist}]
+				}
+				if {$distance < 0 && $distance > -$mindist} {
+					set temp_y [expr {$pressure_y - $mindist}]
+				}
 			}
-			if {$distance < 0 && $distance > -$mindist} {
-				set temp_y [expr {$pressure_y - $mindist}]
-			}
+
 			$::streamline_chart marker configure "label_temperature" -coords [list $elapsed $temp_y]
 			$::streamline_chart_zoomed marker configure "label_temperature" -coords [list $elapsed $temp_y]
 			########################
@@ -4285,12 +4315,15 @@ proc update_chart_label_position {in_realtime} {
 			# make sure weight label doesn't sit on top of the flow label
 			if {[espresso_flow_weight length] > 0} {
 				set weight_y [espresso_flow_weight range end end]
-				set distance [expr {$weight_y - $flow_y}]
-				if {$distance > 0 && $distance < $mindist} {
-					set weight_y [expr {$flow_y + $mindist}]
-				}
-				if {$distance < 0 && $distance > -$mindist} {
-					set weight_y [expr {$flow_y - $mindist}]
+				
+				if {$avoid_overlapping == 1} {
+					set distance [expr {$weight_y - $flow_y}]
+					if {$distance > 0 && $distance < $mindist} {
+						set weight_y [expr {$flow_y + $mindist}]
+					}
+					if {$distance < 0 && $distance > -$mindist} {
+						set weight_y [expr {$flow_y - $mindist}]
+					}
 				}
 
 				$::streamline_chart marker configure "label_weight" -coords [list $elapsed $weight_y]

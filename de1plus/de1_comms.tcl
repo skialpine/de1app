@@ -78,22 +78,30 @@ proc run_next_userdata_cmd {} {
 		set _cmd_command [lindex $_cmd 0]
 		set _readable ""
 
-		if { $_cmd_command == "ble" } {
+		# PERF: $_readable is used ONLY in the -INFO "DEQ" log line just below,
+		# which is suppressed at the default BLE log level. Building it
+		# (format_ble_command / format_map_asc_bin / format_mmr) ran on every
+		# dequeued command and was then discarded -- wasted work right on the BLE
+		# write path that backs up the command queue. Build it only when that log
+		# line would actually be emitted. Behavior-preserving.
+		if { [::logging::ble_log_enabled -INFO] } {
+			if { $_cmd_command == "ble" } {
 
-		    set _readable [::logging::format_ble_command $_cmd]
+			    set _readable [::logging::format_ble_command $_cmd]
 
-		} elseif { $_cmd_command == "de1_comm" \
-				   && [lindex $_cmd 2] in {
-				       "WriteToMMR"
-				       "ReadFromMMR"
-				   } } {
+			} elseif { $_cmd_command == "de1_comm" \
+					   && [lindex $_cmd 2] in {
+					       "WriteToMMR"
+					       "ReadFromMMR"
+					   } } {
 
-		    set _readable [format "%s %s" \
-					   [lindex $_cmd 2] \
-					   [::logging::format_mmr [lindex $_cmd 3]] ]
-		} else {
+			    set _readable [format "%s %s" \
+						   [lindex $_cmd 2] \
+						   [::logging::format_mmr [lindex $_cmd 3]] ]
+			} else {
 
-		    set _readable  [::logging::format_map_asc_bin $_cmd]
+			    set _readable  [::logging::format_map_asc_bin $_cmd]
+			}
 		}
 
 		::comms::msg -INFO "DEQ ([llength $::de1(cmdstack)]) >>>" \

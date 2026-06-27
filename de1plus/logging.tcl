@@ -87,6 +87,10 @@ namespace eval ::logging {
 	variable _log_bytes_written 0
 	variable _log_max_bytes 2097152
 
+	# PERF: 1-second memoization of the formatted date string (see default_logger)
+	variable _ts_cache_secs -1
+	variable _ts_cache_str ""
+
 	# To disable logging, set to Boolean True externally,
 	# prior to any `package require` of de1app code
 	#   namespace eval ::logging { variable disable_logging_for_build True }
@@ -169,9 +173,18 @@ namespace eval ::logging {
 
 		set formatted_output ""
 
+		# PERF: the date string depends only on whole seconds, but `clock format`
+		# (with timezone resolution) is expensive and was re-run on EVERY log line
+		# -- a hot path during a shot. Memoize it to the second; identical output.
+		if { $secs != $::logging::_ts_cache_secs } {
+			set ::logging::_ts_cache_secs $secs
+			set ::logging::_ts_cache_str [clock format $secs -format "%Y-%m-%d %H:%M:%S"]
+		}
+		set _ts $::logging::_ts_cache_str
+
 		foreach line [split $message "\n"] {
 			append formatted_output [format "%s.%03u %s: %s" \
-						      [clock format $secs -format "%Y-%m-%d %H:%M:%S"] $msecs \
+						      $_ts $msecs \
 						      $::logging::severity_to_string($severity) \
 							 $line ] "\n"
 		}

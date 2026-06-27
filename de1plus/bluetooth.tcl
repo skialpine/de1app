@@ -2161,8 +2161,15 @@ proc de1_ble_handler { event data } {
 
 	set event_time [expr { [clock milliseconds] / 1000.0 }]
 
-	set full_data_for_log [::logging::format_ble_event $data]
-
+	#
+	# PERF: these *_for_log strings are used ONLY in ::bt::msg log lines below.
+	# Building them (format_ble_event / format_asc_bin) is expensive and, at the
+	# default BLE log level (WARNING), the messages that consume them are
+	# suppressed -- so the work was wasted on every BLE event (~40% of this
+	# handler's CPU). Build them lazily, only at the log level that would emit
+	# them. Each is gated at the LEAST-verbose severity that consumes it, so this
+	# is behavior-preserving at every log level. The rare -ERROR sites that use
+	# them format inline (see below) so error detail is never lost.
 	#
 	# For logging, only need some of:
 	#   handle ble3
@@ -2173,9 +2180,18 @@ proc de1_ble_handler { event data } {
 	#   permissions 0 access w
 	#   value {'hex: 01 00'}
 	#
-	set data_for_log [::logging::format_ble_event_short $data]
-
-	set value_for_log [::logging::format_ble_event_payload $data]
+	if {[::logging::ble_log_enabled -NOTICE]} {
+		set full_data_for_log [::logging::format_ble_event $data]
+		set data_for_log [::logging::format_ble_event_short $data]
+	} else {
+		set full_data_for_log ""
+		set data_for_log ""
+	}
+	if {[::logging::ble_log_enabled -INFO]} {
+		set value_for_log [::logging::format_ble_event_payload $data]
+	} else {
+		set value_for_log ""
+	}
 
 	set ::settings(ble_debug) 0
 	if {$::settings(ble_debug) == 1} {
@@ -2460,7 +2476,7 @@ proc de1_ble_handler { event data } {
 
 
 				} else {
-					::bt::msg -ERROR "unknown connection msg: $data_for_log"
+					::bt::msg -ERROR "unknown connection msg: [::logging::format_ble_event_short $data]"
 				}
 			}
 			transaction {
@@ -2682,7 +2698,7 @@ proc de1_ble_handler { event data } {
 							} elseif {$::de1(currently_erasing_firmware) == 1 && [ifexists arr2(FWToErase)] == 1} {
 								::bt::msg -NOTICE "BLE recv: currently erasing fw '[ifexists arr2(FWToMap)]'"
 							} elseif {$::de1(currently_erasing_firmware) == 0 && [ifexists arr2(FWToErase)] == 0} {
-								::bt::msg -ERROR "BLE firmware find error BLE recv: [array get arr2] '$value_for_log'"
+								::bt::msg -ERROR "BLE firmware find error BLE recv: [array get arr2] '[::logging::format_ble_event_payload $data]'"
 
 								if {[ifexists arr2(FirstError1)] == [expr 0xFF] && [ifexists arr2(FirstError2)] == [expr 0xFF] && [ifexists arr2(FirstError3)] == [expr 0xFD]} {
 									set ::de1(firmware_update_button_label) "Updated"
@@ -2692,7 +2708,7 @@ proc de1_ble_handler { event data } {
 								set ::de1(currently_updating_firmware) 0
 
 							} else {
-								::bt::msg -ERROR "unknown firmware cmd ack recvied: '$data_for_log'"
+								::bt::msg -ERROR "unknown firmware cmd ack recvied: '[::logging::format_ble_event_short $data]'"
 							}
 						} elseif {$cuuid eq $::de1(cuuid_0B)} {
 							set ::de1(last_ping) [clock seconds]
@@ -2931,7 +2947,7 @@ proc de1_ble_handler { event data } {
 
 
 					} else {
-						::bt::msg -ERROR "weird characteristic received: $data_for_log"
+						::bt::msg -ERROR "weird characteristic received: [::logging::format_ble_event_short $data]"
 					}
 
 				}
@@ -2973,14 +2989,14 @@ proc de1_ble_handler { event data } {
 						::bt::msg -INFO "ACK Acaia Pyxis notifications: $data_for_log"
 
 					    } else {
-						::bt::msg -ERROR "ACK Descriptor unknown write: $data_for_log"
+						::bt::msg -ERROR "ACK Descriptor unknown write: [::logging::format_ble_event_short $data]"
 					    }
 
 					    set ::de1(wrote) 0
 					    run_next_userdata_cmd
 
 					} else {
-					    ::bt::msg -ERROR "BLE unknown descriptor action; $state: ${event}: ${data_for_log}"
+					    ::bt::msg -ERROR "BLE unknown descriptor action; $state: ${event}: [::logging::format_ble_event_short $data]"
 					}
 
 					set run_this 0
@@ -3004,7 +3020,7 @@ proc de1_ble_handler { event data } {
 			}
 
 			default {
-				::bt::msg -ERROR "ble unknown callback $event $data_for_log"
+				::bt::msg -ERROR "ble unknown callback $event [::logging::format_ble_event_short $data]"
 			}
 		}
 	}

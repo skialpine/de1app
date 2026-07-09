@@ -46,10 +46,16 @@
 
 set _bundle [file normalize [file dirname [info script]]]
 
+# Two Android packaged-build markers share this read-only-package redirect. BOTH
+# ship a MINIMAL seed (just enough to boot) and fill the rest via the self-updater
+# on first run, exactly like the OSX notarized minimal-seed build:
+#   google_play.flag -- Google Play Store build.
+#   sideload.flag    -- self-contained sideload APK (AndroWish-bundled de1app).
+set _sideload [file exists [file join $_bundle "sideload.flag"]]
 if {!([info exists ::ios] && $::ios) \
-        && [file exists [file join $_bundle "google_play.flag"]]} {
+        && ([file exists [file join $_bundle "google_play.flag"]] || $_sideload)} {
 
-    set ::play_store_build 1
+    if {$_sideload} { set ::sideload_build 1 } else { set ::play_store_build 1 }
 
     set _wdir [file join $::env(HOME) "Documents" "de1app"]
     set _done [file join $_wdir ".complete"]

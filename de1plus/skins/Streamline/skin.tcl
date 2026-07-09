@@ -711,13 +711,15 @@ proc scale_tare_or_reconnect {} {
 		}
 	}
 }
+
 set btns ""
+	#[list -text [translate "Mix"] -font "Inter-Bold18" -foreground $::dataline_label_color  ] \
+	#[list -text " " -font "Inter-Bold18"] \
+	#[list -text {[lindex [return_temperature_measurement_no_unit [water_mix_temperature] 1 1] 0]} -font "mono12" -foreground $::dataline_data_color   ] \
+	#[list -text {[lindex [return_temperature_measurement_no_unit [water_mix_temperature] 1 1] 1]} -font "mono12" -foreground $::dataline_data_color   ] \
+	#[list -text "    " -font "Inter-SemiBold18"] \
+
 lappend btns \
-	[list -text [translate "Mix"] -font "Inter-Bold18" -foreground $::dataline_label_color  ] \
-	[list -text " " -font "Inter-Bold18"] \
-	[list -text {[lindex [return_temperature_measurement_no_unit [water_mix_temperature] 1 1] 0]} -font "mono12" -foreground $::dataline_data_color   ] \
-	[list -text {[lindex [return_temperature_measurement_no_unit [water_mix_temperature] 1 1] 1]} -font "mono12" -foreground $::dataline_data_color   ] \
-	[list -text "    " -font "Inter-SemiBold18"] \
 	[list -text [translate "Group"] -font "Inter-Bold18" -foreground $::dataline_label_color  ] \
 	[list -text " " -font "Inter-SemiBold18"] \
 	[list -text {[lindex [return_temperature_measurement_no_unit [group_head_heater_temperature] 1 1] 0]} -font "mono12" -foreground $::dataline_data_color   ] \
@@ -755,7 +757,7 @@ if {$::settings(scale_bluetooth_address) != ""} {
 }
 
 
-add_de1_rich_text "off espresso" 690 330 [list left none] 1 1 74 $::background_color $btns
+add_de1_rich_text "off espresso" 690 330 [list left none] 1 1 70 $::background_color $btns
 
 
 set flush_btns ""

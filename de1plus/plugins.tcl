@@ -176,7 +176,7 @@ namespace eval ::plugins {
         } err opts_dict] != 0} {
             ::logging::log_error_result_opts_dict $err $opts_dict
             catch {
-                if {!::debugging} {
+                if {[ifexists ::debugging] != 1} {
                     # remove from enabled plugins
                     disable_plugin $plugin
                 }

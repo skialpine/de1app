@@ -126,10 +126,30 @@ proc run_next_userdata_cmd {} {
 
 		if {$result != 1} {
 			set ::de1(wrote) 0
-			msg -ERROR "BLE error info $::errorInfo"
 
-			if {[string first "invalid handle" $::errorInfo] != -1 } {
-				::comms::msg -INFO "Not retrying this command because BLE handle for the device is now invalid, 1='[lindex $cmds 1]' 2='[lindex $cmds 2]' 3='[lindex $cmds 3]' vital='$vital'"				
+			# $::errorInfo is a global. It only reflects THIS command when the
+			# command actually threw (errcode != 0). When errcode == 0 (e.g. the
+			# write function simply returned "" because the DE1 is not connected),
+			# $::errorInfo still holds a stale, unrelated error from elsewhere in
+			# the app, so we must neither log it nor match against it -- otherwise
+			# we report misleading garbage (this is what produced the bogus
+			# "!::debugging" / "round($in)" messages on the ShotSettings retries).
+			set threw [expr {$errcode != 0}]
+			if {$threw} {
+				msg -ERROR "BLE error info $::errorInfo"
+			}
+
+			if {[ifexists ::sinstance($::de1(suuid))] == ""} {
+				# The DE1 is not connected, so this command could not be sent.
+				# That is not a command failure: do NOT retry a vital command in
+				# a tight 500ms loop (which spams the log forever, e.g. when a
+				# scale is connected but no DE1 is). Drop it and let the queue
+				# drain; settings are re-sent when the DE1 reconnects.
+				::comms::msg -NOTICE "Preceeding command not sent because the DE1 is not connected; not retrying:" \
+					[::logging::format_map_asc_bin [lindex $cmd 1]]
+
+			} elseif {$threw && [string first "invalid handle" $::errorInfo] != -1 } {
+				::comms::msg -INFO "Not retrying this command because BLE handle for the device is now invalid, 1='[lindex $cmds 1]' 2='[lindex $cmds 2]' 3='[lindex $cmds 3]' vital='$vital'"
 
 				if {[string first {$::de1(device_handle)} $::errorInfo] != -1 } {
 					::comms::msg -INFO "Processing DE1 disconnect/bad handle"
@@ -153,7 +173,7 @@ proc run_next_userdata_cmd {} {
 				::comms::msg -WARNING "BLE command failed, will retry ($result):" \
 					[::logging::format_map_asc_bin [lindex $cmd 1]] \
 					"($eer)" \
-					[expr { $eer != 0 ?  $::errorInfo : "" }]
+					[expr { $threw ?  $::errorInfo : "" }]
 
 				# test idea to keep scale from interference with DE1
 				#if {$::de1(scale_device_handle) != 0} {

@@ -2029,6 +2029,16 @@ package require de1_shot 2.0
 
 proc ui_startup {} {
 
+	# Adaptive redraw pacing for the live BLT charts: after a redraw of D ms, the
+	# graph refuses to redraw again for D ms (duty factor 1.0 => ~50%), so on a
+	# slow tablet expensive redraws can't monopolise the CPU and starve BLE/touch.
+	# Self-tuning (no per-device constant). Relies on a -redrawduty graph option in
+	# a patched BLT (see ~/blt_minredrawms_patch.md); set here via the Tk option
+	# database, which the graph reads at creation -- so it must run before any graph
+	# is built. On stock/older BLT the option doesn't exist, so the database entry
+	# is simply never consulted: harmless no-op, default per-sample redraws.
+	catch { option add *Graph.redrawDuty 1.0 }
+
 	load_settings
 
 	# iWish (iPad / Catalyst): fill the device's native screen.  iWish reports the

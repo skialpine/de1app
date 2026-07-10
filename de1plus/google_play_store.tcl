@@ -86,22 +86,11 @@ if {!([info exists ::ios] && $::ios) \
         set ::home $_wdir   ;# homedir (updater.tcl) returns $::home once set
         cd $::home          ;# so pkgIndex.tcl + every package load from here
 
-        # On the FIRST run only, pull the rest of the payload (the skins pruned
-        # from the package, etc.) into [homedir] via the self-updater. Same
-        # deferred-readiness pattern osx.tcl uses: the updater package and the
-        # GUI aren't loaded yet at this early point, so the callback waits until
-        # both exist, then runs start_app_update once. Kept here so no other file
-        # needs to know about Play seeding.
-        if {$_firstrun} {
-            proc ::_play_fill_minimal_seed {tries} {
-                if {[llength [info commands start_app_update]] > 0 \
-                        && [info exists ::de1(current_context)]} {
-                    catch { start_app_update }
-                } elseif {$tries > 0} {
-                    after 2000 [list ::_play_fill_minimal_seed [expr {$tries - 1}]]
-                }
-            }
-            after 3000 [list ::_play_fill_minimal_seed 60]
-        }
+        # This packaged build ships a self-contained seed (the popular skins + all
+        # fonts). Per John: NO "slim/minimal install" toast, and do NOT auto-start
+        # the app self-update on launch -- the user triggers updates manually from
+        # Settings if/when they want the remaining (decorative) skins. So nothing
+        # further happens here beyond the read-only-package -> writable redirect
+        # above; the deferred announce toast + forced start_app_update were removed.
     }
 }

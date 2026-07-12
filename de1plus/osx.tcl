@@ -4,24 +4,17 @@
 # / any package load. Keep this file self-contained and dependency free (core
 # Tcl only), since almost nothing else has loaded yet.
 #
-# A NO-OP on every build except the signed+notarized macOS .app. That build is
-# identified by a `notarized.flag` marker file the build script drops into the
-# bundle's de1plus tree. The ordinary in-place desktop/dev build has no marker,
-# so this file does nothing and the app runs from its own (writable) tree
-# exactly as before. iOS is handled separately by ios.tcl; this file bails out
-# if ios.tcl already claimed the platform (::ios).
+# A NO-OP on every build except the signed+notarized macOS .app and the
+# make_standalone_osx.sh dev .app -- identified by a `notarized.flag` /
+# `standalone.flag` marker the build script drops into the bundle's de1plus tree.
+# The ordinary in-place desktop/dev build has no marker, so this file does
+# nothing and the app runs from its own (writable) tree exactly as before. iOS is
+# handled separately by ios.tcl; this file bails out if ios.tcl claimed ::ios.
 #
-# WHY: a notarized bundle must stay byte-for-byte immutable or its code
-# signature breaks. But de1app writes log.txt, history/, settings.tdb, profiles,
-# etc. INTO its own tree via [homedir]. So on first launch we copy the WHOLE
-# bundle tree out to a writable ~/Documents/de1app, then redirect there -- both
-# the DATA root (homedir) AND the cwd. The cwd matters because pkgIndex.tcl
-# registers every package with a `./`-relative path, so cd'ing before
-# `source pkgIndex.tcl` makes all code load from the writable copy too -- which
-# is what keeps SELF-UPDATE working (the updater writes new .tcl into homedir).
-#
-# Only de1app.tcl, ios.tcl and this osx.tcl run from the (frozen) bundle; every
-# other file loads from the writable copy and updates normally.
+# The actual copy-to-~/Documents/Decent + build_id refresh + redirect (both the
+# DATA root and the cwd) is the shared ::de1_redirect_data_root, defined in
+# de1app.tcl and also used by the Android google_play_store.tcl. This file only
+# adds the macOS-specific marker detection and the minimal-seed self-update fill.
 
 set _bundle [file normalize [file dirname [info script]]]
 
@@ -35,125 +28,43 @@ set _minimal [file exists [file join $_bundle "notarized.flag"]]
 if {!([info exists ::ios] && $::ios) \
         && ($_minimal || [file exists [file join $_bundle "standalone.flag"]])} {
 
-    set _wdir [file join $::env(HOME) "Documents" "de1app"]
-    set _done [file join $_wdir ".complete"]
-    set _firstrun 0
+    set _firstrun [::de1_redirect_data_root \
+        $_bundle [file join $::env(HOME) "Documents" "Decent"] "osx.tcl"]
 
-    if {![file exists $_done]} {
-        # First run (or a previously-interrupted one): copy the bundle's MINIMAL
-        # SEED to a temp dir, drop the .complete sentinel LAST, then atomically
-        # rename into place. tmp+rename means an aborted copy never leaves a
-        # half-populated dir that later looks ready. Silent -- no confirmation.
-        # (The bundle ships only enough to boot; the rest is fetched below.)
-        catch { file mkdir [file dirname $_wdir] }
-        set _tmp "${_wdir}.tmp"
-        catch { file delete -force -- $_tmp }
-        if {[catch { file copy -- $_bundle $_tmp } _err]} {
-            catch { puts stderr "osx.tcl: seed copy failed: $_err" }
-        } else {
-            catch { close [open [file join $_tmp ".complete"] w] }
-            catch { file delete -force -- $_wdir }
-            catch { file rename -- $_tmp $_wdir }
-            set _firstrun 1
+    # Minimal seed: on the FIRST run of the notarized minimal-seed build, pull the
+    # rest of the payload (the skins/resolutions pruned from the bundle, etc.) into
+    # [homedir] via the self-updater, narrated by three always-foreground borg
+    # toasts (arrival -> download started -> download finished). Deferred until the
+    # updater + GUI exist (poll); toasts are catch-wrapped so a non-borg wish still
+    # does the fill silently. start_app_update blocks (pumping events) and does NOT
+    # auto-restart, so "restart to apply" fires once the whole fetch completes.
+    if {$_firstrun eq "1" && $_minimal} {
+        proc ::_osx_fill_minimal_seed {tries} {
+            if {[llength [info commands start_app_update]] > 0 \
+                    && [info exists ::de1(current_context)]} {
+                catch { borg toast "This OSX version is now in your ~/Documents/Decent" }
+                # John: a slim build whose in-app self-update works starts on the
+                # NIGHTLY channel on first run -- always, overriding any baked
+                # osx_update_channel marker -- so first-run users track the latest
+                # build. 2 = nightly. Persisted so it survives past the first launch.
+                catch {
+                    set ::settings(app_updates_beta_enabled) 2
+                    if {[llength [info commands save_settings]] > 0} { save_settings }
+                }
+                # Let the arrival toast linger, then kick off the background fill.
+                after 4000 ::_osx_do_minimal_fill
+            } elseif {$tries > 0} {
+                after 2000 [list ::_osx_fill_minimal_seed [expr {$tries - 1}]]
+            }
         }
-    }
-
-    # If the copy already exists but this bundle is a NEWER build (build_id.txt
-    # differs), refresh the CODE in the copy so rebuilds actually take effect --
-    # otherwise the copy is frozen forever at whatever first dropped .complete, and
-    # a rebuilt Decent.app silently keeps running the old code. Overwrite-ONLY (it
-    # never deletes), and it only touches the trees that ship as code, so user data
-    # in the copy -- settings.tdb, history/, profiles/, skin_settings/, etc. -- is
-    # left completely alone. Runs before the cd + package load below, so the new
-    # code is what loads this launch. Wrapped in catch-everywhere to never wedge boot.
-    if {!$_firstrun && [file exists $_done]} {
-        set _bid_b [file join $_bundle "build_id.txt"]
-        set _bid_c [file join $_wdir "build_id.txt"]
-        set _vb ""; set _vc ""
-        catch { set _fh [open $_bid_b r]; set _vb [string trim [read $_fh]]; close $_fh }
-        catch { set _fh [open $_bid_c r]; set _vc [string trim [read $_fh]]; close $_fh }
-        if {[file exists $_bid_b] && $_vb ne "" && $_vb ne $_vc} {
-            proc ::_osx_refresh_tree {src dst} {
-                foreach _f [glob -nocomplain -directory $src -- *] {
-                    set _t [file join $dst [file tail $_f]]
-                    if {[file isdirectory $_f]} {
-                        if {![file exists $_t]} { catch { file mkdir $_t } }
-                        ::_osx_refresh_tree $_f $_t
-                    } else {
-                        catch { file copy -force -- $_f $_t }
-                    }
-                }
+        proc ::_osx_do_minimal_fill {} {
+            catch { borg toast "Currently running minimal: full app downloading in the background" }
+            set _ok 0
+            catch { set _ok [start_app_update] }
+            if {$_ok == 1} {
+                catch { borg toast "Full app downloaded, restart to apply" }
             }
-            foreach _sub {skins lib plugins} {
-                set _s [file join $_bundle $_sub]
-                if {[file isdirectory $_s]} {
-                    if {![file exists [file join $_wdir $_sub]]} { catch { file mkdir [file join $_wdir $_sub] } }
-                    catch { ::_osx_refresh_tree $_s [file join $_wdir $_sub] }
-                }
-            }
-            foreach _f [glob -nocomplain -directory $_bundle -- *.tcl] {
-                catch { file copy -force -- $_f [file join $_wdir [file tail $_f]] }
-            }
-            catch { file copy -force -- $_bid_b $_bid_c }
-            catch { puts stderr "osx.tcl: refreshed code in copy to build $_vb" }
         }
-    }
-
-    # Redirect only if the writable copy is actually complete; otherwise fall
-    # through and run (read-only) from the bundle rather than failing to boot.
-    if {[file exists $_done]} {
-        set ::home $_wdir   ;# homedir (updater.tcl) returns $::home once set
-        cd $::home          ;# so pkgIndex.tcl + every package load from here
-
-        # Minimal seed: on the FIRST run only, pull the rest of the payload (the
-        # skins pruned from the bundle, etc.) into [homedir]. The self-updater
-        # already force-fetches every file missing locally; we just trigger it,
-        # because its on-launch auto-run only fires in sleep/saver context.
-        # Deferred via `after` + a readiness poll: the updater package and the
-        # GUI aren't loaded yet at this very early point, so the callback waits
-        # until both exist, then runs start_app_update once. Kept here so no
-        # other file needs to know anything about seeding.
-        if {$_firstrun && $_minimal} {
-            # First run of the minimal-seed package: announce the move, then pull
-            # the rest of the payload (the pruned skins/resolutions, etc.) into
-            # [homedir] via the self-updater. Three borg toasts (always-foreground)
-            # narrate it: arrival -> download started -> download finished. All
-            # deferred until the updater + GUI exist (poll). Toasts are catch-wrapped
-            # so a non-borg wish still does the fill silently. start_app_update
-            # blocks (pumping events) until done and does NOT auto-restart, so the
-            # "restart to apply" toast fires once the whole fetch completes.
-            proc ::_osx_fill_minimal_seed {tries} {
-                if {[llength [info commands start_app_update]] > 0 \
-                        && [info exists ::de1(current_context)]} {
-                    catch { borg toast "This OSX version is now in your ~/Documents/de1app" }
-                    # Self-update from the SAME channel this package was built for
-                    # (osx_update_channel marker: 0=stable 1=beta 2=nightly).
-                    catch {
-                        set _chf [file join [homedir] "osx_update_channel"]
-                        if {[file exists $_chf]} {
-                            set _fh [open $_chf r]
-                            set _ch [string trim [read $_fh]]
-                            close $_fh
-                            if {[string is integer -strict $_ch]} {
-                                set ::settings(app_updates_beta_enabled) $_ch
-                            }
-                        }
-                    }
-                    # Let the arrival toast linger, then kick off the background fill.
-                    after 4000 ::_osx_do_minimal_fill
-                } elseif {$tries > 0} {
-                    after 2000 [list ::_osx_fill_minimal_seed [expr {$tries - 1}]]
-                }
-            }
-            proc ::_osx_do_minimal_fill {} {
-                catch { borg toast "Currently running minimal: full app downloading in the background" }
-                set _ok 0
-                catch { set _ok [start_app_update] }
-                if {$_ok == 1} {
-                    catch { borg toast "Full app downloaded, restart to apply" }
-                }
-            }
-            after 3000 [list ::_osx_fill_minimal_seed 60]
-        }
+        after 3000 [list ::_osx_fill_minimal_seed 60]
     }
 }

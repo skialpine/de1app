@@ -1,34 +1,27 @@
-# google_play_store.tcl -- Google Play Store Android-build data-root redirect.
+# google_play_store.tcl -- Google Play Store / sideload Android data-root redirect.
 #
 # Sourced very early by de1app.tcl, right after osx.tcl and before pkgIndex.tcl /
 # any package load. Keep this file self-contained and dependency free (core Tcl
 # only), since almost nothing else has loaded yet. iOS is handled separately by
 # ios.tcl; this file bails out if ios.tcl already claimed the platform (::ios).
 #
-# A NO-OP on every build except a Google-Play-distributed Android build. That
-# build is identified by a `google_play.flag` marker file the Play build script
-# drops into the bundle's de1plus tree (exactly like osx.tcl's `notarized.flag`).
-# An ordinary SIDELOADED Android APK has no marker, so this file does nothing and
-# the app runs from its own (already-writable) extracted tree exactly as before.
+# A NO-OP on every build except a packaged Android build (Google Play or a
+# self-contained sideload APK), identified by a `google_play.flag` / `sideload.flag`
+# marker the build script drops into the bundle. An ordinary sideloaded APK with
+# no marker does nothing here and runs from its own already-writable tree.
 #
-# WHY: this MIRRORS osx.tcl, NOT ios.tcl. A Play build ships the de1plus tree as
-# read-only packaged assets, so writing into it via [homedir] (log.txt, history/,
-# settings.tdb, profiles, self-update, ...) fails. So on first launch we copy the
-# WHOLE tree out to a writable ~/Documents/de1app and redirect there -- both the
-# DATA root (homedir) AND the cwd. The cwd matters because pkgIndex.tcl registers
-# every package with a `./`-relative path, so cd'ing before `source pkgIndex.tcl`
-# makes all code load from the writable copy too -- which is what keeps
-# SELF-UPDATE working (the updater writes new .tcl into homedir).
+# WHY: this MIRRORS osx.tcl (and shares its code). A packaged build ships the
+# de1plus tree as read-only assets, so writing into it via [homedir] (log.txt,
+# history/, settings.tdb, profiles, self-update, ...) fails. The shared
+# ::de1_redirect_data_root (defined in de1app.tcl) copies the WHOLE tree out to a
+# writable ~/Documents/Decent on first run and redirects there -- both the DATA
+# root (homedir) AND the cwd -- which keeps SELF-UPDATE working.
 #
-# This is the DELIBERATE difference from iOS: iOS forbids running interpreted
-# code from a writable/user-visible location (Apple guideline 2.5.2), so ios.tcl
-# keeps code read-only in the bundle and disables self-update. Android/Google
-# Play has no such restriction -- an app's writable storage may hold and run its
-# own scripts -- so Android behaves like the macOS app: writable copy + working
+# This is the DELIBERATE difference from iOS: iOS forbids running interpreted code
+# from a writable/user-visible location (Apple guideline 2.5.2), so ios.tcl keeps
+# code read-only in the bundle and disables self-update. Android/Google Play has
+# no such restriction, so it behaves like the macOS app: writable copy + working
 # in-app self-update.
-#
-# Only de1app.tcl, ios.tcl, osx.tcl and this file run from the (read-only) bundle;
-# every other file loads from the writable copy and self-updates normally.
 #
 # ---------------------------------------------------------------------------
 # NOT enforceable from Tcl -- the Play build/packaging side must ALSO handle:
@@ -46,9 +39,7 @@
 
 set _bundle [file normalize [file dirname [info script]]]
 
-# Two Android packaged-build markers share this read-only-package redirect. BOTH
-# ship a MINIMAL seed (just enough to boot) and fill the rest via the self-updater
-# on first run, exactly like the OSX notarized minimal-seed build:
+# Two Android packaged-build markers share this read-only-package redirect:
 #   google_play.flag -- Google Play Store build.
 #   sideload.flag    -- self-contained sideload APK (AndroWish-bundled de1app).
 set _sideload [file exists [file join $_bundle "sideload.flag"]]
@@ -57,40 +48,29 @@ if {!([info exists ::ios] && $::ios) \
 
     if {$_sideload} { set ::sideload_build 1 } else { set ::play_store_build 1 }
 
-    set _wdir [file join $::env(HOME) "Documents" "de1app"]
-    set _done [file join $_wdir ".complete"]
-    set _firstrun 0
+    set _firstrun [::de1_redirect_data_root \
+        $_bundle [file join $::env(HOME) "Documents" "Decent"] "google_play_store.tcl"]
 
-    if {![file exists $_done]} {
-        # First run (or a previously-interrupted one): copy the bundle's seed to
-        # a temp dir, drop the .complete sentinel LAST, then atomically rename
-        # into place. tmp+rename means an aborted copy never leaves a
-        # half-populated dir that later looks ready. (The package ships only
-        # enough to boot; the rest is fetched by the self-updater below.)
-        catch { file mkdir [file dirname $_wdir] }
-        set _tmp "${_wdir}.tmp"
-        catch { file delete -force -- $_tmp }
-        if {[catch { file copy -- $_bundle $_tmp } _err]} {
-            catch { puts stderr "google_play_store.tcl: seed copy failed: $_err" }
-        } else {
-            catch { close [open [file join $_tmp ".complete"] w] }
-            catch { file delete -force -- $_wdir }
-            catch { file rename -- $_tmp $_wdir }
-            set _firstrun 1
+    # This packaged build ships a self-contained seed (the popular skins + all
+    # fonts). Per John: NO "slim/minimal install" toast, and do NOT auto-start the
+    # app self-update on launch -- the user triggers updates manually from Settings
+    # if/when they want the remaining (decorative) skins. So the only first-run
+    # action is to default the update channel to NIGHTLY so first-run users track
+    # the latest build. Deferred until the GUI + updater have loaded (poll) so this
+    # very-early set is not clobbered when settings.tdb loads; then persisted.
+    if {$_firstrun eq "1"} {
+        proc ::_slim_first_run_set_nightly {tries} {
+            if {[info exists ::de1(current_context)] \
+                    && [llength [info commands start_app_update]] > 0 \
+                    && [llength [info commands save_settings]] > 0} {
+                catch {
+                    set ::settings(app_updates_beta_enabled) 2
+                    save_settings
+                }
+            } elseif {$tries > 0} {
+                after 2000 [list ::_slim_first_run_set_nightly [expr {$tries - 1}]]
+            }
         }
-    }
-
-    # Redirect only if the writable copy is actually complete; otherwise fall
-    # through and run (read-only) from the package rather than failing to boot.
-    if {[file exists $_done]} {
-        set ::home $_wdir   ;# homedir (updater.tcl) returns $::home once set
-        cd $::home          ;# so pkgIndex.tcl + every package load from here
-
-        # This packaged build ships a self-contained seed (the popular skins + all
-        # fonts). Per John: NO "slim/minimal install" toast, and do NOT auto-start
-        # the app self-update on launch -- the user triggers updates manually from
-        # Settings if/when they want the remaining (decorative) skins. So nothing
-        # further happens here beyond the read-only-package -> writable redirect
-        # above; the deferred announce toast + forced start_app_update were removed.
+        after 3000 [list ::_slim_first_run_set_nightly 60]
     }
 }

@@ -2085,7 +2085,7 @@ proc ui_startup {} {
 	set app_version [package version de1app]
 
 	# Ultra-minimal standalone build: on the FIRST launch after the bundle is copied
-	# to ~/Documents/de1app (the .ultra_minimal_shown sentinel is absent), explain
+	# to its writable ~/Documents data dir (the .ultra_minimal_shown sentinel is absent), explain
 	# how to self-update to the full version. Kept INDEPENDENT of the version/
 	# changelog check below so it fires reliably regardless of version stamping, and
 	# shows exactly once per fresh copy.

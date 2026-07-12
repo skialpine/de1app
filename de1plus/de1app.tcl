@@ -11,19 +11,95 @@ cd "[file dirname [info script]]"
 # bundle, before any package loads. No-op on every non-iWish platform.
 source "ios.tcl"
 
-# macOS notarized-bundle data-root redirect: copies the read-only bundle to a
-# writable ~/Documents/de1app on first run and cd's there, so [homedir] writes
-# and self-update work without breaking the code signature. No-op unless the
-# build dropped a notarized.flag marker. Must run after ios.tcl (it skips iOS)
-# and before pkgIndex.tcl (it cd's so packages load from the writable copy).
+# Shared read-only-package -> writable-copy redirect, used by BOTH osx.tcl (macOS
+# .app) and google_play_store.tcl (Android Play/sideload). A packaged build ships
+# its de1plus tree as read-only assets, but de1app writes log.txt/history/settings/
+# profiles + self-updates INTO its own tree via [homedir]; so on first launch we
+# copy the WHOLE bundle out to $wdir (~/Documents/Decent), then redirect there --
+# both the DATA root ($::home / homedir) AND the cwd (pkgIndex.tcl registers every
+# package with a `./`-relative path, so cd'ing before it loads makes all code load
+# from the writable copy too, keeping SELF-UPDATE working). iOS is the deliberate
+# exception (ios.tcl: code stays read-only in the bundle, Apple guideline 2.5.2).
+#
+# Returns 1 on the first run (fresh copy just made), 0 on a later run, or "" if the
+# copy is incomplete (caller then stays on the read-only bundle rather than failing
+# to boot). On a NEWER build (build_id.txt differs) it refreshes the CODE trees
+# (skins/lib/plugins + top-level *.tcl) in the copy, overwrite-ONLY so user data
+# (settings.tdb, history/, profiles/, ...) is never touched. All catch-wrapped so
+# it can never wedge boot. $tag is only used to label stderr diagnostics.
+proc ::de1_redirect_data_root {bundle wdir tag} {
+    set _done [file join $wdir ".complete"]
+    set _firstrun 0
+    if {![file exists $_done]} {
+        # First run (or a previously-interrupted one): copy to a temp dir, drop the
+        # .complete sentinel LAST, then atomically rename into place. tmp+rename
+        # means an aborted copy never leaves a half-populated dir that looks ready.
+        catch { file mkdir [file dirname $wdir] }
+        set _tmp "${wdir}.tmp"
+        catch { file delete -force -- $_tmp }
+        if {[catch { file copy -- $bundle $_tmp } _err]} {
+            catch { puts stderr "$tag: seed copy failed: $_err" }
+        } else {
+            catch { close [open [file join $_tmp ".complete"] w] }
+            catch { file delete -force -- $wdir }
+            catch { file rename -- $_tmp $wdir }
+            set _firstrun 1
+        }
+    }
+    # Refresh the CODE in an existing copy when this bundle is a newer build, so a
+    # rebuilt package actually takes effect instead of the copy staying frozen.
+    if {!$_firstrun && [file exists $_done]} {
+        set _bid_b [file join $bundle "build_id.txt"]
+        set _bid_c [file join $wdir "build_id.txt"]
+        set _vb ""; set _vc ""
+        catch { set _fh [open $_bid_b r]; set _vb [string trim [read $_fh]]; close $_fh }
+        catch { set _fh [open $_bid_c r]; set _vc [string trim [read $_fh]]; close $_fh }
+        if {[file exists $_bid_b] && $_vb ne "" && $_vb ne $_vc} {
+            proc ::_de1_refresh_tree {src dst} {
+                foreach _f [glob -nocomplain -directory $src -- *] {
+                    set _t [file join $dst [file tail $_f]]
+                    if {[file isdirectory $_f]} {
+                        if {![file exists $_t]} { catch { file mkdir $_t } }
+                        ::_de1_refresh_tree $_f $_t
+                    } else {
+                        catch { file copy -force -- $_f $_t }
+                    }
+                }
+            }
+            foreach _sub {skins lib plugins} {
+                set _s [file join $bundle $_sub]
+                if {[file isdirectory $_s]} {
+                    if {![file exists [file join $wdir $_sub]]} { catch { file mkdir [file join $wdir $_sub] } }
+                    catch { ::_de1_refresh_tree $_s [file join $wdir $_sub] }
+                }
+            }
+            foreach _f [glob -nocomplain -directory $bundle -- *.tcl] {
+                catch { file copy -force -- $_f [file join $wdir [file tail $_f]] }
+            }
+            catch { file copy -force -- $_bid_b $_bid_c }
+            catch { puts stderr "$tag: refreshed code in copy to build $_vb" }
+        }
+    }
+    # Redirect only if the writable copy is actually complete.
+    if {![file exists $_done]} { return "" }
+    set ::home $wdir   ;# homedir (updater.tcl) returns $::home once set
+    cd $::home         ;# so pkgIndex.tcl + every package load from here
+    return $_firstrun
+}
+
+# macOS notarized-bundle data-root redirect: on a notarized.flag / standalone.flag
+# build, copy the read-only bundle to ~/Documents/Decent on first run and cd there
+# (via ::de1_redirect_data_root) so [homedir] writes and self-update work without
+# breaking the code signature. No-op otherwise. Must run after ios.tcl (it skips
+# iOS) and before pkgIndex.tcl (it cd's so packages load from the writable copy).
 source "osx.tcl"
 
-# Google Play Store Android build: mirrors osx.tcl -- on a Play-distributed build
-# (identified by a build-dropped google_play.flag marker) the de1plus tree ships
-# as read-only assets, so copy it to a writable ~/Documents/de1app on first run
-# and cd there, keeping [homedir] writes and in-app self-update working. (Unlike
-# iOS, Android may run its own scripts from writable storage.) No-op on a
-# sideloaded APK, macOS, and iOS. Must run after ios.tcl/osx.tcl (it skips iOS).
+# Google Play Store / sideload Android build: same read-only-package redirect via
+# the shared ::de1_redirect_data_root -- on a google_play.flag / sideload.flag
+# build the de1plus tree ships as read-only assets, so copy it to a writable
+# ~/Documents/Decent on first run and cd there, keeping [homedir] writes and
+# in-app self-update working. (Unlike iOS, Android may run its own scripts from
+# writable storage.) No-op on macOS and iOS. Must run after ios.tcl/osx.tcl.
 source "google_play_store.tcl"
 
 source "pkgIndex.tcl"

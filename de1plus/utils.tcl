@@ -908,6 +908,23 @@ proc get_set_tablet_brightness { {setting ""} } {
         return $actual
     }
 
+    # macOS desktop fix: the exit path releases the brightness override with
+    # `get_set_tablet_brightness -1` (the Android way -- a negative value tells the
+    # OS to restore its own brightness). On macOS there is no such OS-managed
+    # override, and `borg brightness -1` clamps to 0, so it would leave the laptop
+    # screen BLACK after de1app quits. So on macOS: remember the user's brightness
+    # the first time we change it, and RESTORE that value when asked to release
+    # (negative setting), instead of passing the negative straight through to borg.
+    if {![info exists ::_is_macos_desktop]} { set ::_is_macos_desktop [running_on_macos_desktop] }
+    if {$::_is_macos_desktop} {
+        if {![info exists ::pre_de1_brightness] && [string is integer -strict $actual] && $actual >= 0} {
+            set ::pre_de1_brightness $actual
+        }
+        if {[string is integer -strict $setting] && $setting < 0} {
+            set setting [expr {[info exists ::pre_de1_brightness] ? $::pre_de1_brightness : 100}]
+        }
+    }
+
     # only call the Android setting if the setting needs to be changed.
     if {$actual != $setting} {
         borg brightness $setting
@@ -942,6 +959,17 @@ proc running_on_ios {} {
     if {![dict exists $bi manufacturer] || [dict get $bi manufacturer] ne "Apple"} { return 0 }
     if {![dict exists $bi model]} { return 0 }
     return [regexp {^(iPad|iPhone|iPod)} [dict get $bi model]]
+}
+
+proc running_on_macos_desktop {} {
+    # True only on the macOS desktop (undroidwish / Mac Catalyst) build: an Apple
+    # manufacturer with a NON-iOS model. iOS hardware (iPad/iPhone/iPod) and
+    # Android (manufacturer != Apple) or no borg all return 0. Used to special-case
+    # screen-brightness restore on exit (see get_set_tablet_brightness).
+    if {[catch {borg osbuildinfo} bi]} { return 0 }
+    if {![dict exists $bi manufacturer] || [dict get $bi manufacturer] ne "Apple"} { return 0 }
+    if {![dict exists $bi model]} { return 0 }
+    return [expr {![regexp {^(iPad|iPhone|iPod)} [dict get $bi model]]}]
 }
 
 proc ios_install_hardexit {} {
